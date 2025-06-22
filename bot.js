@@ -57,7 +57,6 @@ class DualSourceSniperBot {
         process.on('SIGTERM', () => {
             console.log('🔄 Railway restart...');
             this.sendTelegramMessage('🔄 DUAL SNIPER RESTARTING...');
-            this.gracefulShutdown();
         });
 
         process.on('uncaughtException', (error) => {
@@ -142,10 +141,7 @@ class DualSourceSniperBot {
                 case '/commands':
                     await this.sendHelpMessage();
                     break;
-                case '/stop':
-                    await this.sendTelegramMessage('🛑 STOPPING DUAL SNIPER...');
-                    setTimeout(() => this.gracefulShutdown(), 2000);
-                    break;
+
                 default:
                     await this.sendTelegramMessage('❓ Unknown command. Send /help for available commands.');
             }
@@ -288,7 +284,6 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
 /trades - Trade history
 
 🎮 Control:
-/stop - Stop bot
 /help - Show commands
 
 🔥 DUAL SOURCE TARGETS:
@@ -704,13 +699,6 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
         console.log('');
     }
 
-    gracefulShutdown() {
-        console.log('🛑 Dual Sniper shutdown...');
-        this.isRunning = false;
-        this.showStats();
-        setTimeout(() => process.exit(0), 2000);
-    }
-
     async start() {
         console.log('🚀 Starting Dual Source Sniper Bot...');
         
@@ -721,9 +709,6 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
         }
     }
 
-    stop() {
-        this.gracefulShutdown();
-    }
 }
 
 // Start the Dual Sniper
