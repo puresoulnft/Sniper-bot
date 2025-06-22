@@ -1,5 +1,5 @@
 const { Connection, PublicKey, Keypair } = require('@solana/web3.js');
-const { Jupiter } = require('@jup-ag/core');
+const { createJupiterApiClient } = require('@jup-ag/api');
 const axios = require('axios');
 const express = require('express');
 
@@ -254,12 +254,7 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance! Add more SOL to continue
 
     async initialize() {
         try {
-            this.jupiter = new Jupiter({
-                connection: this.connection,
-                cluster: 'mainnet-beta',
-                user: this.wallet,
-            });
-            await this.jupiter.load();
+            this.jupiter = createJupiterApiClient();
 
             const balance = await this.connection.getBalance(this.wallet.publicKey);
             
