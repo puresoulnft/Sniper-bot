@@ -296,42 +296,102 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready to snipe!'
 
     async scanDexScreener() {
         try {
-            // Get trending tokens from DexScreener
-            const response = await axios.get('https://api.dexscreener.com/latest/dex/tokens/trending/solana', {
-                timeout: 8000
-            });
-
-            if (response.data && response.data.pairs) {
-                const validPairs = response.data.pairs.filter(pair => 
-                    pair.chainId === 'solana' &&
-                    pair.baseToken &&
-                    pair.baseToken.address &&
-                    !this.scannedTokens.has(pair.baseToken.address) &&
-                    !this.positions.has(pair.baseToken.address) &&
-                    pair.priceUsd &&
-                    parseFloat(pair.priceUsd) > 0 &&
-                    pair.volume &&
-                    pair.volume.h24 > 1000 // At least $1k 24h volume
-                );
-
-                return validPairs.slice(0, 10).map(pair => ({
-                    address: pair.baseToken.address,
-                    symbol: pair.baseToken.symbol || 'UNKNOWN',
-                    name: pair.baseToken.name || 'Unknown',
-                    price: parseFloat(pair.priceUsd),
-                    volume24h: pair.volume.h24,
-                    marketCap: pair.marketCap,
-                    priceChange24h: pair.priceChange.h24,
-                    liquidity: pair.liquidity?.usd || 0
-                }));
+            const tokens = [];
+            
+            // First, get boosted tokens (these are often good targets)
+            try {
+                const boostResponse = await axios.get('https://api.dexscreener.com/token-boosts/latest/v1', {
+                    timeout: 8000
+                });
+    
+                if (boostResponse.data && Array.isArray(boostResponse.data)) {
+                    const solanaBoosts = boostResponse.data.filter(boost => 
+                        boost.chainId === 'solana' &&
+                        boost.tokenAddress &&
+                        !this.scannedTokens.has(boost.tokenAddress) &&
+                        !this.positions.has(boost.tokenAddress)
+                    );
+    
+                    for (const boost of solanaBoosts.slice(0, 5)) {
+                        // Get price data for boosted token
+                        try {
+                            const priceResponse = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${boost.tokenAddress}`, {
+                                timeout: 5000
+                            });
+                            
+                            if (priceResponse.data?.pairs?.[0]) {
+                                const pair = priceResponse.data.pairs[0];
+                                tokens.push({
+                                    address: boost.tokenAddress,
+                                    symbol: pair.baseToken?.symbol || 'BOOST',
+                                    name: pair.baseToken?.name || 'Boosted Token',
+                                    price: parseFloat(pair.priceUsd) || 0.001,
+                                    volume24h: pair.volume?.h24 || boost.amount * 10,
+                                    marketCap: pair.marketCap || boost.totalAmount * 100,
+                                    priceChange24h: pair.priceChange?.h24 || 15,
+                                    liquidity: pair.liquidity?.usd || 20000,
+                                    boostAmount: boost.amount
+                                });
+                            }
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('Boost API error:', e.message);
             }
-
-            return [];
-        } catch (error) {
-            console.error('DexScreener scan error:', error.message);
-            return [];
+    
+            // Then get token profiles for more variety
+            try {
+                const profileResponse = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', {
+                    timeout: 8000
+                });
+    
+                if (profileResponse.data && Array.isArray(profileResponse.data)) {
+                    const solanaProfiles = profileResponse.data.filter(profile => 
+                        profile.chainId === 'solana' &&
+                        profile.tokenAddress &&
+                        !this.scannedTokens.has(profile.tokenAddress) &&
+                        !this.positions.has(profile.tokenAddress) &&
+                        !tokens.find(t => t.address === profile.tokenAddress) // Don't duplicate
+                    );
+    
+                    for (const profile of solanaProfiles.slice(0, 5)) {
+                        try {
+                            const priceResponse = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${profile.tokenAddress}`, {
+                                timeout: 5000
+                            });
+                            
+                            if (priceResponse.data?.pairs?.[0]) {
+                                const pair = priceResponse.data.pairs[0];
+                                tokens.push({
+                                    address: profile.tokenAddress,
+                                    symbol: pair.baseToken?.symbol || 'NEW',
+                                    name: pair.baseToken?.name || profile.description || 'New Token',
+                                    price: parseFloat(pair.priceUsd) || 0.001,
+                                    volume24h: pair.volume?.h24 || 1000,
+                                    marketCap: pair.marketCap || 100000,
+                                    priceChange24h: pair.priceChange?.h24 || 10,
+                                liquidity: pair.liquidity?.usd || 10000
+                            });
+                        }
+                    } catch (e) {
+                        continue;
+                    }
+                }
+            }
+        } catch (e) {
+            console.log('Profile API error:', e.message);
         }
+
+        return tokens;
+
+    } catch (error) {
+        console.error('DexScreener scan error:', error.message);
+        return [];
     }
+}
 
     analyzeToken(token) {
         let score = 0;
