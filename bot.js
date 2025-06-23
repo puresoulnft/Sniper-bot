@@ -1,4 +1,4 @@
-const { Connection, PublicKey, Keypair } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, Transaction } = require('@solana/web3.js');
 const { createJupiterApiClient } = require('@jup-ag/api');
 const axios = require('axios');
 const express = require('express');
@@ -20,12 +20,13 @@ class DualSourceSniperBot {
         this.KOTH_TARGET = parseFloat(process.env.KOTH_TARGET) || 8.0;
         this.DEX_FRESH_TARGET = parseFloat(process.env.DEX_FRESH_TARGET) || 4.0;
         this.DEX_TARGET = parseFloat(process.env.DEX_TARGET) || 2.0;
+        
         // Bitquery settings
         this.BITQUERY_URL = 'https://streaming.bitquery.io/graphql';
         this.BITQUERY_HEADERS = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.BITQUERY_API_KEY || ''}`
-};
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.BITQUERY_API_KEY || ''}`
+        };
         
         // Stop losses
         this.PUMP_STOP_LOSS = parseFloat(process.env.PUMP_STOP_LOSS) || 0.30;
@@ -521,36 +522,63 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
             await this.sendTelegramMessage(snipeAlert);
 
             // REAL Jupiter trade execution
-const quoteResponse = await this.jupiter.quoteGet({
-    inputMint: 'So11111111111111111111111111111111111111112', // SOL
-    outputMint: tokenAddress,
-    amount: this.SNIPE_AMOUNT * 1e9,
-    slippageBps: 1500, // 15% slippage
-});
+            const quoteResponse = await this.jupiter.quoteGet({
+                inputMint: 'So11111111111111111111111111111111111111112', // SOL
+                outputMint: tokenAddress,
+                amount: this.SNIPE_AMOUNT * 1e9,
+                slippageBps: 1500, // 15% slippage
+            });
 
-if (!quoteResponse) {
-    console.log(`❌ No quote for ${tokenSymbol}`);
-    await this.sendTelegramMessage(`❌ REAL SNIPE FAILED: No quote for ${tokenSymbol}`);
-    return false;
-}
+            if (!quoteResponse) {
+                console.log(`❌ No quote for ${tokenSymbol}`);
+                await this.sendTelegramMessage(`❌ REAL SNIPE FAILED: No quote for ${tokenSymbol}`);
+                return false;
+            }
 
-const swapResponse = await this.jupiter.swapPost({
-    swapRequest: {
-        quoteResponse,
-        userPublicKey: this.wallet.publicKey.toBase58(),
-        wrapAndUnwrapSol: true,
-    }
-});
+            const swapResponse = await this.jupiter.swapPost({
+                swapRequest: {
+                    quoteResponse,
+                    userPublicKey: this.wallet.publicKey.toBase58(),
+                    wrapAndUnwrapSol: true,
+                }
+            });
 
-if (!swapResponse?.swapTransaction) {
-    console.log(`❌ No swap transaction for ${tokenSymbol}`);
-    await this.sendTelegramMessage(`❌ REAL SNIPE FAILED: No swap for ${tokenSymbol}`);
-    return false;
-}
+            if (!swapResponse?.swapTransaction) {
+                console.log(`❌ No swap transaction for ${tokenSymbol}`);
+                await this.sendTelegramMessage(`❌ REAL SNIPE FAILED: No swap for ${tokenSymbol}`);
+                return false;
+            }
 
-// Execute the real trade
-const realEntryPrice = quoteResponse.outAmount / quoteResponse.inAmount;
-const realAmount = quoteResponse.outAmount;
+            // Actually execute the transaction
+            try {
+                const transaction = Transaction.from(Buffer.from(swapResponse.swapTransaction, 'base64'));
+                const signature = await this.connection.sendTransaction(transaction, [this.wallet], {
+                    skipPreflight: false,
+                    preflightCommitment: 'confirmed'
+                });
+                
+                console.log(`📝 Buy transaction sent: ${signature}`);
+                
+                // Wait for confirmation
+                const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
+                
+                if (confirmation.value.err) {
+                    console.log(`❌ Buy transaction failed: ${confirmation.value.err}`);
+                    await this.sendTelegramMessage(`❌ BUY TRANSACTION FAILED: ${tokenSymbol}`);
+                    return false;
+                }
+                
+                console.log(`✅ Buy transaction confirmed: ${signature}`);
+                
+            } catch (txError) {
+                console.error(`❌ Transaction execution failed:`, txError.message);
+                await this.sendTelegramMessage(`❌ TRANSACTION FAILED: ${tokenSymbol} - ${txError.message}`);
+                return false;
+            }
+
+            // Use REAL values from the actual trade
+            const realEntryPrice = quoteResponse.outAmount / quoteResponse.inAmount;
+            const realAmount = quoteResponse.outAmount;
 
             const successMsg = `✅ DUAL SNIPE SUCCESS!
 
@@ -564,6 +592,7 @@ ${sourceEmoji} ${tokenSymbol}
             console.log(`✅ DUAL SNIPED ${tokenSymbol} from ${analysis.token.source}!`);
             await this.sendTelegramMessage(successMsg);
             
+            // Store REAL values, not mock ones
             this.positions.set(tokenAddress, {
                 symbol: tokenSymbol,
                 source: analysis.token.source,
@@ -593,36 +622,61 @@ ${sourceEmoji} ${tokenSymbol}
             console.log(`💰 SELLING ${position.symbol}... (${reason})`);
 
             // REAL Jupiter sell execution
-const quoteResponse = await this.jupiter.quoteGet({
-    inputMint: tokenAddress,
-    outputMint: 'So11111111111111111111111111111111111111112', // SOL
-    amount: position.amount,
-    slippageBps: 2000, // 20% slippage for selling
-});
+            const quoteResponse = await this.jupiter.quoteGet({
+                inputMint: tokenAddress,
+                outputMint: 'So11111111111111111111111111111111111111112', // SOL
+                amount: position.amount,
+                slippageBps: 2000, // 20% slippage for selling
+            });
 
-if (!quoteResponse) {
-    console.log(`❌ No sell quote for ${position.symbol}`);
-    return false;
-}
+            if (!quoteResponse) {
+                console.log(`❌ No sell quote for ${position.symbol}`);
+                return false;
+            }
 
-const swapResponse = await this.jupiter.swapPost({
-    swapRequest: {
-        quoteResponse,
-        userPublicKey: this.wallet.publicKey.toBase58(),
-        wrapAndUnwrapSol: true,
-    }
-});
+            const swapResponse = await this.jupiter.swapPost({
+                swapRequest: {
+                    quoteResponse,
+                    userPublicKey: this.wallet.publicKey.toBase58(),
+                    wrapAndUnwrapSol: true,
+                }
+            });
 
-if (!swapResponse?.swapTransaction) {
-    console.log(`❌ No sell swap for ${position.symbol}`);
-    return false;
-}
+            if (!swapResponse?.swapTransaction) {
+                console.log(`❌ No sell swap for ${position.symbol}`);
+                return false;
+            }
 
-const realExitPrice = quoteResponse.outAmount / quoteResponse.inAmount;
-const multiplier = realExitPrice / position.entryPrice;
-const profitSOL = (quoteResponse.outAmount / 1e9) - this.SNIPE_AMOUNT;
-            
-            
+            // Actually execute the sell transaction
+            try {
+                const transaction = Transaction.from(Buffer.from(swapResponse.swapTransaction, 'base64'));
+                const signature = await this.connection.sendTransaction(transaction, [this.wallet], {
+                    skipPreflight: false,
+                    preflightCommitment: 'confirmed'
+                });
+                
+                console.log(`📝 Sell transaction sent: ${signature}`);
+                
+                // Wait for confirmation
+                const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
+                
+                if (confirmation.value.err) {
+                    console.log(`❌ Sell transaction failed: ${confirmation.value.err}`);
+                    return false;
+                }
+                
+                console.log(`✅ Sell transaction confirmed: ${signature}`);
+                
+            } catch (txError) {
+                console.error(`❌ Sell transaction execution failed:`, txError.message);
+                return false;
+            }
+
+            // Use REAL exit price from the actual trade
+            const realExitPrice = quoteResponse.outAmount / quoteResponse.inAmount;
+            const multiplier = realExitPrice / position.entryPrice;
+            const profitSOL = (quoteResponse.outAmount / 1e9) - this.SNIPE_AMOUNT;
+            const holdTimeMin = (Date.now() - position.buyTime) / 60000;
 
             const emoji = profitSOL > 0 ? '🚀' : '📉';
             const sourceEmoji = this.getSourceEmoji(position.source);
@@ -668,13 +722,13 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
                 if (!this.positions.has(tokenAddress)) return;
 
                 // REAL price monitoring via DexScreener
-const currentPrice = await this.getCurrentPrice(tokenAddress);
-if (!currentPrice) {
-    setTimeout(checkPosition, 15000);
-    return;
-}
+                const currentPrice = await this.getCurrentPrice(tokenAddress);
+                if (!currentPrice) {
+                    setTimeout(checkPosition, 15000);
+                    return;
+                }
 
-const currentMultiplier = currentPrice / position.entryPrice;
+                const currentMultiplier = currentPrice / position.entryPrice;
 
                 if (currentMultiplier >= position.targetMultiplier) {
                     await this.sellToken(tokenAddress, `${position.targetMultiplier}x TARGET`);
