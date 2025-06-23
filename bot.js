@@ -567,8 +567,8 @@ ${sourceEmoji} ${tokenSymbol}
             this.positions.set(tokenAddress, {
                 symbol: tokenSymbol,
                 source: analysis.token.source,
-                entryPrice: mockEntryPrice,
-                amount: mockAmount,
+                entryPrice: realEntryPrice,
+                amount: realAmount,
                 buyTime: Date.now(),
                 targetMultiplier: targetMultiplier,
                 stopLoss: this.getStopLoss(analysis.token.source)
@@ -619,12 +619,10 @@ if (!swapResponse?.swapTransaction) {
 }
 
 const realExitPrice = quoteResponse.outAmount / quoteResponse.inAmount;
+const multiplier = realExitPrice / position.entryPrice;
+const profitSOL = (quoteResponse.outAmount / 1e9) - this.SNIPE_AMOUNT;
             
-            const randomFactor = 0.5 + Math.random() * 1.5;
-            const mockExitPrice = position.entryPrice * baseMultiplier * randomFactor;
-            const multiplier = mockExitPrice / position.entryPrice;
-            const profitSOL = (position.amount * mockExitPrice) - this.SNIPE_AMOUNT;
-            const holdTimeMin = (Date.now() - position.buyTime) / 60000;
+            
 
             const emoji = profitSOL > 0 ? '🚀' : '📉';
             const sourceEmoji = this.getSourceEmoji(position.source);
