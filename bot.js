@@ -553,7 +553,7 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
             try {
 
                 const transaction = VersionedTransaction.deserialize(Buffer.from(swapResponse.swapTransaction, 'base64'));
-                const signature = await this.connection.sendTransaction(transaction, [this.wallet], {
+                const signature = await this.connection.sendRawTransaction(transaction.serialize(),{
                     skipPreflight: false,
                     preflightCommitment: 'confirmed'
                 });
@@ -651,7 +651,7 @@ ${sourceEmoji} ${tokenSymbol}
             // Actually execute the sell transaction
             try {
                 const transaction = VersionedTransaction.deserialize(Buffer.from(swapResponse.swapTransaction, 'base64'));
-                const signature = await this.connection.sendTransaction(transaction, [this.wallet], {
+                const signature = await this.connection.sendRawTransaction(transaction.serialize(), {
                     skipPreflight: false,
                     preflightCommitment: 'confirmed'
                 });
