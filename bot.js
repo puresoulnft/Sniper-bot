@@ -520,9 +520,37 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
 
             await this.sendTelegramMessage(snipeAlert);
 
-            // Mock successful buy
-            const mockEntryPrice = 0.001;
-            const mockAmount = this.SNIPE_AMOUNT / mockEntryPrice;
+            // REAL Jupiter trade execution
+const quoteResponse = await this.jupiter.quoteGet({
+    inputMint: 'So11111111111111111111111111111111111111112', // SOL
+    outputMint: tokenAddress,
+    amount: this.SNIPE_AMOUNT * 1e9,
+    slippageBps: 1500, // 15% slippage
+});
+
+if (!quoteResponse) {
+    console.log(`❌ No quote for ${tokenSymbol}`);
+    await this.sendTelegramMessage(`❌ REAL SNIPE FAILED: No quote for ${tokenSymbol}`);
+    return false;
+}
+
+const swapResponse = await this.jupiter.swapPost({
+    swapRequest: {
+        quoteResponse,
+        userPublicKey: this.wallet.publicKey.toBase58(),
+        wrapAndUnwrapSol: true,
+    }
+});
+
+if (!swapResponse?.swapTransaction) {
+    console.log(`❌ No swap transaction for ${tokenSymbol}`);
+    await this.sendTelegramMessage(`❌ REAL SNIPE FAILED: No swap for ${tokenSymbol}`);
+    return false;
+}
+
+// Execute the real trade
+const realEntryPrice = quoteResponse.outAmount / quoteResponse.inAmount;
+const realAmount = quoteResponse.outAmount;
 
             const successMsg = `✅ DUAL SNIPE SUCCESS!
 
@@ -564,10 +592,33 @@ ${sourceEmoji} ${tokenSymbol}
 
             console.log(`💰 SELLING ${position.symbol}... (${reason})`);
 
-            // Varied outcomes based on source
-            const baseMultiplier = position.source === 'pump_early' ? 1.5 : 
-                                 position.source === 'king_of_hill' ? 1.3 :
-                                 position.source === 'dex_fresh' ? 1.2 : 1.1;
+            // REAL Jupiter sell execution
+const quoteResponse = await this.jupiter.quoteGet({
+    inputMint: tokenAddress,
+    outputMint: 'So11111111111111111111111111111111111111112', // SOL
+    amount: position.amount,
+    slippageBps: 2000, // 20% slippage for selling
+});
+
+if (!quoteResponse) {
+    console.log(`❌ No sell quote for ${position.symbol}`);
+    return false;
+}
+
+const swapResponse = await this.jupiter.swapPost({
+    swapRequest: {
+        quoteResponse,
+        userPublicKey: this.wallet.publicKey.toBase58(),
+        wrapAndUnwrapSol: true,
+    }
+});
+
+if (!swapResponse?.swapTransaction) {
+    console.log(`❌ No sell swap for ${position.symbol}`);
+    return false;
+}
+
+const realExitPrice = quoteResponse.outAmount / quoteResponse.inAmount;
             
             const randomFactor = 0.5 + Math.random() * 1.5;
             const mockExitPrice = position.entryPrice * baseMultiplier * randomFactor;
@@ -618,13 +669,14 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
             try {
                 if (!this.positions.has(tokenAddress)) return;
 
-                // Mock price monitoring with varied behavior by source
-                const volatility = position.source === 'pump_early' ? 0.3 : 
-                                 position.source === 'king_of_hill' ? 0.2 :
-                                 position.source === 'dex_fresh' ? 0.15 : 0.1;
-                
-                const randomChange = (Math.random() - 0.5) * volatility;
-                const currentMultiplier = 1 + randomChange;
+                // REAL price monitoring via DexScreener
+const currentPrice = await this.getCurrentPrice(tokenAddress);
+if (!currentPrice) {
+    setTimeout(checkPosition, 15000);
+    return;
+}
+
+const currentMultiplier = currentPrice / position.entryPrice;
 
                 if (currentMultiplier >= position.targetMultiplier) {
                     await this.sellToken(tokenAddress, `${position.targetMultiplier}x TARGET`);
@@ -706,6 +758,18 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
             this.isRunning = true;
             console.log('🔥 DUAL SNIPER IS LIVE - HUNTING ACROSS ALL SOURCES! 🔥');
             this.tradingLoop();
+        }
+    }
+
+    async getCurrentPrice(tokenAddress) {
+        try {
+            const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, {
+                timeout: 5000
+            });
+            return parseFloat(response.data.pairs?.[0]?.priceUsd) || 0;
+        } catch (error) {
+            console.error('Price fetch error:', error.message);
+            return 0;
         }
     }
 
