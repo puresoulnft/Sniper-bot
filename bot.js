@@ -1,4 +1,4 @@
-const { Connection, PublicKey, Keypair, Transaction } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, Transaction, VersionedTransaction } = require('@solana/web3.js');
 const { createJupiterApiClient } = require('@jup-ag/api');
 const axios = require('axios');
 const express = require('express');
@@ -551,7 +551,8 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
 
             // Actually execute the transaction
             try {
-                const transaction = Transaction.from(Buffer.from(swapResponse.swapTransaction, 'base64'));
+
+                const transaction = VersionedTransaction.deserialize(Buffer.from(swapResponse.swapTransaction, 'base64'));
                 const signature = await this.connection.sendTransaction(transaction, [this.wallet], {
                     skipPreflight: false,
                     preflightCommitment: 'confirmed'
@@ -649,7 +650,7 @@ ${sourceEmoji} ${tokenSymbol}
 
             // Actually execute the sell transaction
             try {
-                const transaction = Transaction.from(Buffer.from(swapResponse.swapTransaction, 'base64'));
+                const transaction = VersionedTransaction.deserialize(Buffer.from(swapResponse.swapTransaction, 'base64'));
                 const signature = await this.connection.sendTransaction(transaction, [this.wallet], {
                     skipPreflight: false,
                     preflightCommitment: 'confirmed'
