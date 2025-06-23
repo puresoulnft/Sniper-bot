@@ -1,9 +1,9 @@
-const { Connection, PublicKey, Keypair, Transaction, VersionedTransaction } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, VersionedTransaction } = require('@solana/web3.js');
 const { createJupiterApiClient } = require('@jup-ag/api');
 const axios = require('axios');
 const express = require('express');
 
-class DualSourceSniperBot {
+class DexScreenerSniperBot {
     constructor() {
         // Environment variables
         this.PRIVATE_KEY = JSON.parse(process.env.PRIVATE_KEY || '[]');
@@ -11,26 +11,11 @@ class DualSourceSniperBot {
         this.TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
         this.RPC_URL = process.env.RPC_URL || 'https://api.mainnet-beta.solana.com';
         
-        // Basic settings
+        // Trading settings
         this.SNIPE_AMOUNT = parseFloat(process.env.SNIPE_AMOUNT) || 0.03;
         this.MAX_POSITIONS = parseInt(process.env.MAX_POSITIONS) || 5;
-        
-        // Multi-tier profit targets
-        this.EARLY_PUMP_TARGET = parseFloat(process.env.EARLY_PUMP_TARGET) || 20.0;
-        this.KOTH_TARGET = parseFloat(process.env.KOTH_TARGET) || 8.0;
-        this.DEX_FRESH_TARGET = parseFloat(process.env.DEX_FRESH_TARGET) || 4.0;
-        this.DEX_TARGET = parseFloat(process.env.DEX_TARGET) || 2.0;
-        
-        // Bitquery settings
-        this.BITQUERY_URL = 'https://streaming.bitquery.io/graphql';
-        this.BITQUERY_HEADERS = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.BITQUERY_API_KEY || ''}`
-        };
-        
-        // Stop losses
-        this.PUMP_STOP_LOSS = parseFloat(process.env.PUMP_STOP_LOSS) || 0.30;
-        this.DEX_STOP_LOSS = parseFloat(process.env.DEX_STOP_LOSS) || 0.40;
+        this.PROFIT_TARGET = parseFloat(process.env.PROFIT_TARGET) || 3.0; // 3x target
+        this.STOP_LOSS = parseFloat(process.env.STOP_LOSS) || 0.50; // 50% stop loss
 
         if (this.PRIVATE_KEY.length === 0) {
             console.error('❌ PRIVATE_KEY not set!');
@@ -45,26 +30,8 @@ class DualSourceSniperBot {
         this.lastUpdateId = 0;
         this.scannedTokens = new Set();
         
-        this.setupRailwayOptimizations();
         this.setupHealthServer();
         this.setupTelegramCommands();
-    }
-
-    setupRailwayOptimizations() {
-        setInterval(() => {
-            console.log('🔄 Dual Sniper heartbeat:', new Date().toLocaleTimeString());
-        }, 300000);
-
-        process.on('SIGTERM', () => {
-            console.log('🔄 Railway restart...');
-            this.sendTelegramMessage('🔄 DUAL SNIPER RESTARTING...');
-        });
-
-        process.on('uncaughtException', (error) => {
-            console.error('💥 Exception:', error);
-            this.sendTelegramMessage('💥 DUAL SNIPER CRASHED - Restarting...');
-            setTimeout(() => process.exit(1), 1000);
-        });
     }
 
     setupHealthServer() {
@@ -74,12 +41,11 @@ class DualSourceSniperBot {
         app.get('/', (req, res) => {
             res.json({
                 status: 'running',
-                version: 'Dual Source Sniper v3.0',
+                version: 'DexScreener Sniper v1.0',
                 uptime: process.uptime(),
                 activePositions: this.positions.size,
                 totalTrades: this.trades.length,
-                wallet: this.wallet.publicKey.toBase58(),
-                sources: ['Bitquery', 'DexScreener']
+                wallet: this.wallet.publicKey.toBase58()
             });
         });
 
@@ -142,7 +108,6 @@ class DualSourceSniperBot {
                 case '/commands':
                     await this.sendHelpMessage();
                     break;
-
                 default:
                     await this.sendTelegramMessage('❓ Unknown command. Send /help for available commands.');
             }
@@ -154,7 +119,7 @@ class DualSourceSniperBot {
     async sendStatusUpdate() {
         const uptime = (process.uptime() / 3600).toFixed(1);
         
-        const statusMsg = `📊 DUAL SNIPER STATUS
+        const statusMsg = `📊 DEXSCREENER SNIPER STATUS
 
 🟢 Status: Active & Hunting
 ⏰ Uptime: ${uptime} hours
@@ -162,13 +127,12 @@ class DualSourceSniperBot {
 📊 Positions: ${this.positions.size}/${this.MAX_POSITIONS}
 🎯 Total Trades: ${this.trades.length}
 
-🔥 HUNTING SOURCES:
-🚀 Pump Early (${this.EARLY_PUMP_TARGET}x target)
-👑 King of Hill (${this.KOTH_TARGET}x target)
-💎 DEX Fresh (${this.DEX_FRESH_TARGET}x target)
-📈 DEX (${this.DEX_TARGET}x target)
+🔥 SETTINGS:
+💰 Per Trade: ${this.SNIPE_AMOUNT} SOL
+🎯 Target: ${this.PROFIT_TARGET}x
+🛡️ Stop Loss: ${(this.STOP_LOSS * 100).toFixed(0)}%
 
-${this.positions.size > 0 ? '📈 Monitoring...' : '🔍 Scanning...'}`;
+${this.positions.size > 0 ? '📈 Monitoring...' : '🔍 Scanning DexScreener...'}`;
 
         await this.sendTelegramMessage(statusMsg);
     }
@@ -179,23 +143,12 @@ ${this.positions.size > 0 ? '📈 Monitoring...' : '🔍 Scanning...'}`;
         const winRate = this.trades.length > 0 ? (winCount / this.trades.length * 100) : 0;
         const bestTrade = this.trades.length > 0 ? Math.max(...this.trades.map(t => t.multiplier)) : 0;
 
-        const pumpTrades = this.trades.filter(t => t.source === 'pump_early').length;
-        const kothTrades = this.trades.filter(t => t.source === 'king_of_hill').length;
-        const dexFreshTrades = this.trades.filter(t => t.source === 'dex_fresh').length;
-        const dexTrades = this.trades.filter(t => t.source === 'dex').length;
-
-        const statsMsg = `📈 DUAL SNIPER PERFORMANCE
+        const statsMsg = `📈 SNIPER PERFORMANCE
 
 💰 Total P&L: ${totalProfit > 0 ? '+' : ''}${totalProfit.toFixed(4)} SOL
 🎯 Trades: ${this.trades.length}
 📊 Win Rate: ${winRate.toFixed(1)}%
 🚀 Best: ${bestTrade.toFixed(2)}x
-
-📍 SOURCES:
-🚀 Pump Early: ${pumpTrades}
-👑 King of Hill: ${kothTrades}  
-💎 DEX Fresh: ${dexFreshTrades}
-📈 DEX: ${dexTrades}
 
 ${totalProfit > 0 ? '🎉 Profitable!' : '📈 Keep hunting!'}`;
 
@@ -204,7 +157,7 @@ ${totalProfit > 0 ? '🎉 Profitable!' : '📈 Keep hunting!'}`;
 
     async sendActivePositions() {
         if (this.positions.size === 0) {
-            await this.sendTelegramMessage('📊 ACTIVE POSITIONS\n\n💤 No active positions\n\n🔍 Dual scanning...');
+            await this.sendTelegramMessage('📊 ACTIVE POSITIONS\n\n💤 No active positions\n\n🔍 Scanning DexScreener...');
             return;
         }
 
@@ -212,12 +165,10 @@ ${totalProfit > 0 ? '🎉 Profitable!' : '📈 Keep hunting!'}`;
         
         for (const [tokenAddress, position] of this.positions) {
             const holdTimeMin = (Date.now() - position.buyTime) / 60000;
-            const sourceEmoji = this.getSourceEmoji(position.source);
             
-            positionsMsg += `${sourceEmoji} ${position.symbol}\n`;
-            positionsMsg += `📍 ${position.source}\n`;
+            positionsMsg += `💎 ${position.symbol}\n`;
             positionsMsg += `⏰ ${holdTimeMin.toFixed(1)} min\n`;
-            positionsMsg += `🎯 ${position.targetMultiplier}x\n\n`;
+            positionsMsg += `🎯 ${this.PROFIT_TARGET}x target\n\n`;
         }
 
         await this.sendTelegramMessage(positionsMsg);
@@ -228,19 +179,17 @@ ${totalProfit > 0 ? '🎉 Profitable!' : '📈 Keep hunting!'}`;
             const balance = await this.connection.getBalance(this.wallet.publicKey);
             const balanceSOL = balance / 1e9;
             
-            const balanceMsg = `💰 DUAL SNIPER BALANCE
+            const balanceMsg = `💰 SNIPER BALANCE
 
 💰 SOL: ${balanceSOL.toFixed(4)} SOL
 🎯 Per Trade: ${this.SNIPE_AMOUNT} SOL
-📊 Possible: ${Math.floor(balanceSOL / this.SNIPE_AMOUNT)}
+📊 Possible Trades: ${Math.floor(balanceSOL / this.SNIPE_AMOUNT)}
 
-🔥 TARGETS:
-🚀 Pump Early: ${this.EARLY_PUMP_TARGET}x
-👑 King of Hill: ${this.KOTH_TARGET}x
-💎 DEX Fresh: ${this.DEX_FRESH_TARGET}x
-📈 DEX: ${this.DEX_TARGET}x
+🔥 SETTINGS:
+🎯 Profit Target: ${this.PROFIT_TARGET}x
+🛡️ Stop Loss: ${(this.STOP_LOSS * 100).toFixed(0)}%
 
-${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
+${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready to snipe!'}`;
 
             await this.sendTelegramMessage(balanceMsg);
         } catch (error) {
@@ -259,10 +208,8 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
 
         for (const trade of recentTrades) {
             const emoji = trade.profitSOL > 0 ? '🚀' : '📉';
-            const sourceEmoji = this.getSourceEmoji(trade.source);
             
             historyMsg += `${emoji} ${trade.symbol}\n`;
-            historyMsg += `📍 ${sourceEmoji} ${trade.source}\n`;
             historyMsg += `📊 ${trade.multiplier.toFixed(2)}x | ${trade.profitSOL > 0 ? '+' : ''}${trade.profitSOL.toFixed(4)} SOL\n`;
             historyMsg += `⏰ ${trade.holdTime.toFixed(1)} min\n\n`;
         }
@@ -275,7 +222,7 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
     }
 
     async sendHelpMessage() {
-        const helpMsg = `🤖 DUAL SNIPER COMMANDS
+        const helpMsg = `🤖 DEXSCREENER SNIPER COMMANDS
 
 📊 Monitoring:
 /status - Bot status
@@ -287,25 +234,14 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
 🎮 Control:
 /help - Show commands
 
-🔥 DUAL SOURCE TARGETS:
-🚀 Pump Early: ${this.EARLY_PUMP_TARGET}x
-👑 King of Hill: ${this.KOTH_TARGET}x
-💎 DEX Fresh: ${this.DEX_FRESH_TARGET}x
-📈 DEX: ${this.DEX_TARGET}x
+🔥 SETTINGS:
+🎯 Target: ${this.PROFIT_TARGET}x
+🛡️ Stop Loss: ${(this.STOP_LOSS * 100).toFixed(0)}%
+💰 Per Trade: ${this.SNIPE_AMOUNT} SOL
 
-💡 Hunting across Bitquery + DexScreener!`;
+💡 Hunting DexScreener for quick profits!`;
 
         await this.sendTelegramMessage(helpMsg);
-    }
-
-    getSourceEmoji(source) {
-        const emojis = {
-            'pump_early': '🚀',
-            'king_of_hill': '👑',
-            'dex_fresh': '💎',
-            'dex': '📈'
-        };
-        return emojis[source] || '🎯';
     }
 
     async sendTelegramMessage(message, silent = false) {
@@ -327,25 +263,20 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
             this.jupiter = createJupiterApiClient();
             const balance = await this.connection.getBalance(this.wallet.publicKey);
             
-            const startMessage = `🔥 DUAL SOURCE SNIPER DEPLOYED!
+            const startMessage = `🔥 DEXSCREENER SNIPER DEPLOYED!
 
 💰 Wallet: ${this.wallet.publicKey.toBase58()}
 💰 Balance: ${(balance / 1e9).toFixed(4)} SOL
 🎯 Per Trade: ${this.SNIPE_AMOUNT} SOL
 
-🔥 MULTI-TIER TARGETS:
-🚀 Pump Early: ${this.EARLY_PUMP_TARGET}x
-👑 King of Hill: ${this.KOTH_TARGET}x
-💎 DEX Fresh: ${this.DEX_FRESH_TARGET}x
-📈 DEX: ${this.DEX_TARGET}x
+🔥 SETTINGS:
+🎯 Profit Target: ${this.PROFIT_TARGET}x
+🛡️ Stop Loss: ${(this.STOP_LOSS * 100).toFixed(0)}%
+📊 Max Positions: ${this.MAX_POSITIONS}
 
-🎯 DUAL SOURCES:
-• Bitquery Pump.fun API
-• Fixed DexScreener API
+🔥 SNIPER IS LIVE! 🔥`;
 
-🔥 DUAL SNIPER IS LIVE! 🔥`;
-
-            console.log('🎯 DUAL SOURCE SNIPER READY!');
+            console.log('🎯 DEXSCREENER SNIPER READY!');
             console.log(`💰 Balance: ${(balance / 1e9).toFixed(4)} SOL`);
             
             await this.sendTelegramMessage(startMessage);
@@ -363,122 +294,66 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
         }
     }
 
-    async scanDexScreenerFixed() {
+    async scanDexScreener() {
         try {
-            const response = await axios.get('https://api.dexscreener.com/token-boosts/latest/v1', {
+            // Get trending tokens from DexScreener
+            const response = await axios.get('https://api.dexscreener.com/latest/dex/tokens/trending/solana', {
                 timeout: 8000
             });
 
-            if (response.data && Array.isArray(response.data)) {
-                const solanaBoosts = response.data.filter(boost => 
-                    boost.chainId === 'solana' &&
-                    !this.scannedTokens.has(boost.tokenAddress) &&
-                    !this.positions.has(boost.tokenAddress)
+            if (response.data && response.data.pairs) {
+                const validPairs = response.data.pairs.filter(pair => 
+                    pair.chainId === 'solana' &&
+                    pair.baseToken &&
+                    pair.baseToken.address &&
+                    !this.scannedTokens.has(pair.baseToken.address) &&
+                    !this.positions.has(pair.baseToken.address) &&
+                    pair.priceUsd &&
+                    parseFloat(pair.priceUsd) > 0 &&
+                    pair.volume &&
+                    pair.volume.h24 > 1000 // At least $1k 24h volume
                 );
 
-                return solanaBoosts.slice(0, 10).map(boost => ({
-                    address: boost.tokenAddress,
-                    symbol: 'BOOST',
-                    name: 'Boosted Token',
-                    boostAmount: boost.amount,
-                    totalAmount: boost.totalAmount,
-                    source: boost.amount > 1000 ? 'dex' : 'dex_fresh',
-                    url: boost.url,
-                    description: boost.description
+                return validPairs.slice(0, 10).map(pair => ({
+                    address: pair.baseToken.address,
+                    symbol: pair.baseToken.symbol || 'UNKNOWN',
+                    name: pair.baseToken.name || 'Unknown',
+                    price: parseFloat(pair.priceUsd),
+                    volume24h: pair.volume.h24,
+                    marketCap: pair.marketCap,
+                    priceChange24h: pair.priceChange.h24,
+                    liquidity: pair.liquidity?.usd || 0
                 }));
             }
 
             return [];
         } catch (error) {
-            console.error('DexScreener error:', error.message);
+            console.error('DexScreener scan error:', error.message);
             return [];
         }
     }
 
-    async scanBitqueryReal() {
-        try {
-            const query = `
-            query {
-                Solana {
-                    TokenSupplyUpdates(
-                        where: {
-                            Instruction: {
-                                Program: {
-                                    Address: {is: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}
-                                    Method: {is: "create"}
-                                }
-                            }
-                            Block: {
-                                Time: {since: "${new Date(Date.now() - 30*60*1000).toISOString()}"}
-                            }
-                        }
-                        limit: {count: 10}
-                        orderBy: {descending: Block_Time}
-                    ) {
-                        Block {
-                            Time
-                        }
-                        Transaction {
-                            Signer
-                        }
-                        TokenSupplyUpdate {
-                            Currency {
-                                Symbol
-                                Name
-                                MintAddress
-                                Uri
-                            }
-                            PostBalance
-                        }
-                    }
-                }
-            }`;
-    
-            const response = await axios.post(this.BITQUERY_URL, {
-                query: query
-            }, {
-                headers: this.BITQUERY_HEADERS,
-                timeout: 8000
-            });
-    
-            if (response.data?.data?.Solana?.TokenSupplyUpdates) {
-                return response.data.data.Solana.TokenSupplyUpdates
-                    .filter(update => !this.scannedTokens.has(update.TokenSupplyUpdate.Currency.MintAddress))
-                    .map(update => ({
-                        address: update.TokenSupplyUpdate.Currency.MintAddress,
-                        symbol: update.TokenSupplyUpdate.Currency.Symbol || 'UNKNOWN',
-                        name: update.TokenSupplyUpdate.Currency.Name || 'Unknown',
-                        createdAt: update.Block.Time,
-                        creator: update.Transaction.Signer,
-                        supply: update.TokenSupplyUpdate.PostBalance,
-                        source: 'pump_early',
-                        uri: update.TokenSupplyUpdate.Currency.Uri
-                    }));
-            }
-            return [];
-        } catch (error) {
-            console.error('Bitquery real error:', error.message);
-            return [];
-        }
-    }
-
-    async analyzeToken(token) {
+    analyzeToken(token) {
         let score = 0;
         
-        if (token.source === 'pump_early') {
-            score += 50;
-            if (token.name && token.symbol) score += 30;
-            if (token.supply) score += 10;
-        } else if (token.source === 'king_of_hill') {
-            score += 60;
-            if (token.marketCap >= 30000 && token.marketCap <= 35000) score += 30;
-        } else if (token.source === 'dex_fresh') {
-            score += 40;
-            if (token.boostAmount && token.boostAmount < 1000) score += 20;
-        } else if (token.source === 'dex') {
-            score += 30;
-            if (token.boostAmount && token.boostAmount > 1000) score += 20;
-        }
+        // Volume check
+        if (token.volume24h > 10000) score += 30;
+        else if (token.volume24h > 5000) score += 20;
+        else if (token.volume24h > 1000) score += 10;
+        
+        // Price change check (moderate pumps are good)
+        if (token.priceChange24h > 20 && token.priceChange24h < 100) score += 30;
+        else if (token.priceChange24h > 10) score += 20;
+        else if (token.priceChange24h > 0) score += 10;
+        
+        // Liquidity check
+        if (token.liquidity > 50000) score += 20;
+        else if (token.liquidity > 20000) score += 15;
+        else if (token.liquidity > 10000) score += 10;
+        
+        // Market cap check (not too high, not too low)
+        if (token.marketCap > 100000 && token.marketCap < 1000000) score += 20;
+        else if (token.marketCap > 50000) score += 10;
 
         return {
             score: score,
@@ -487,41 +362,23 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
         };
     }
 
-    getTargetMultiplier(source) {
-        const targets = {
-            'pump_early': this.EARLY_PUMP_TARGET,
-            'king_of_hill': this.KOTH_TARGET,
-            'dex_fresh': this.DEX_FRESH_TARGET,
-            'dex': this.DEX_TARGET
-        };
-        return targets[source] || this.DEX_TARGET;
-    }
-
-    getStopLoss(source) {
-        return source.includes('pump') || source === 'king_of_hill' ? 
-            this.PUMP_STOP_LOSS : this.DEX_STOP_LOSS;
-    }
-
     async buyToken(tokenAddress, tokenSymbol, analysis) {
         try {
-            console.log(`⚡ DUAL SNIPING ${tokenSymbol} from ${analysis.token.source}...`);
+            console.log(`⚡ SNIPING ${tokenSymbol}...`);
             
-            const sourceEmoji = this.getSourceEmoji(analysis.token.source);
-            const targetMultiplier = this.getTargetMultiplier(analysis.token.source);
+            const snipeAlert = `🎯 SNIPE TARGET!
 
-            const snipeAlert = `${sourceEmoji} DUAL SNIPE TARGET!
-
-🪙 ${tokenSymbol}
-📍 ${analysis.token.source}
+💎 ${tokenSymbol}
 📊 Score: ${analysis.score}/100
+💰 Volume: $${(analysis.token.volume24h / 1000).toFixed(1)}k
+📈 24h: ${analysis.token.priceChange24h > 0 ? '+' : ''}${analysis.token.priceChange24h.toFixed(1)}%
 ⚡ ${this.SNIPE_AMOUNT} SOL
-🎯 Target: ${targetMultiplier}x
 
-🔄 Dual sniping...`;
+🔄 Sniping...`;
 
             await this.sendTelegramMessage(snipeAlert);
 
-            // REAL Jupiter trade execution
+            // Get Jupiter quote
             const quoteResponse = await this.jupiter.quoteGet({
                 inputMint: 'So11111111111111111111111111111111111111112', // SOL
                 outputMint: tokenAddress,
@@ -531,7 +388,7 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
 
             if (!quoteResponse) {
                 console.log(`❌ No quote for ${tokenSymbol}`);
-                await this.sendTelegramMessage(`❌ REAL SNIPE FAILED: No quote for ${tokenSymbol}`);
+                await this.sendTelegramMessage(`❌ SNIPE FAILED: No quote for ${tokenSymbol}`);
                 return false;
             }
 
@@ -545,63 +402,56 @@ ${balanceSOL < this.SNIPE_AMOUNT ? '⚠️ Low balance!' : '✅ Ready!'}`;
 
             if (!swapResponse?.swapTransaction) {
                 console.log(`❌ No swap transaction for ${tokenSymbol}`);
-                await this.sendTelegramMessage(`❌ REAL SNIPE FAILED: No swap for ${tokenSymbol}`);
+                await this.sendTelegramMessage(`❌ SNIPE FAILED: No swap for ${tokenSymbol}`);
                 return false;
             }
 
-            // Actually execute the transaction
+            // Execute the transaction
             try {
-
                 const transaction = VersionedTransaction.deserialize(Buffer.from(swapResponse.swapTransaction, 'base64'));
-                const signature = await this.connection.sendRawTransaction(transaction.serialize(),{
+                transaction.sign([this.wallet]);
+                
+                const signature = await this.connection.sendRawTransaction(transaction.serialize(), {
                     skipPreflight: false,
                     preflightCommitment: 'confirmed'
                 });
                 
                 console.log(`📝 Buy transaction sent: ${signature}`);
                 
-                // Wait for confirmation
                 const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
                 
                 if (confirmation.value.err) {
                     console.log(`❌ Buy transaction failed: ${confirmation.value.err}`);
-                    await this.sendTelegramMessage(`❌ BUY TRANSACTION FAILED: ${tokenSymbol}`);
+                    await this.sendTelegramMessage(`❌ BUY FAILED: ${tokenSymbol}`);
                     return false;
                 }
                 
                 console.log(`✅ Buy transaction confirmed: ${signature}`);
                 
             } catch (txError) {
-                console.error(`❌ Transaction execution failed:`, txError.message);
-                await this.sendTelegramMessage(`❌ TRANSACTION FAILED: ${tokenSymbol} - ${txError.message}`);
+                console.error(`❌ Transaction failed:`, txError.message);
+                await this.sendTelegramMessage(`❌ TRANSACTION FAILED: ${tokenSymbol}`);
                 return false;
             }
 
-            // Use REAL values from the actual trade
-            const realEntryPrice = quoteResponse.outAmount / quoteResponse.inAmount;
-            const realAmount = quoteResponse.outAmount;
+            const entryPrice = analysis.token.price;
+            const amount = quoteResponse.outAmount;
 
-            const successMsg = `✅ DUAL SNIPE SUCCESS!
+            const successMsg = `✅ SNIPE SUCCESS!
 
-${sourceEmoji} ${tokenSymbol}
-📍 ${analysis.token.source}
-⚡ ${this.SNIPE_AMOUNT} SOL
-🎯 ${targetMultiplier}x target
-
+💎 ${tokenSymbol}
+💰 ${this.SNIPE_AMOUNT} SOL
+🎯 ${this.PROFIT_TARGET}x target
 📊 Monitoring...`;
 
-            console.log(`✅ DUAL SNIPED ${tokenSymbol} from ${analysis.token.source}!`);
+            console.log(`✅ SNIPED ${tokenSymbol}!`);
             await this.sendTelegramMessage(successMsg);
             
-            // Store REAL values, not mock ones
             this.positions.set(tokenAddress, {
                 symbol: tokenSymbol,
-                source: analysis.token.source,
-                entryPrice: realEntryPrice,
-                amount: realAmount,
-                buyTime: Date.now(),
-                targetMultiplier: targetMultiplier,
-                stopLoss: this.getStopLoss(analysis.token.source)
+                entryPrice: entryPrice,
+                amount: amount,
+                buyTime: Date.now()
             });
 
             this.scannedTokens.add(tokenAddress);
@@ -609,8 +459,8 @@ ${sourceEmoji} ${tokenSymbol}
             return true;
 
         } catch (error) {
-            console.error(`❌ Dual snipe failed:`, error.message);
-            await this.sendTelegramMessage(`❌ DUAL SNIPE FAILED: ${tokenSymbol}`);
+            console.error(`❌ Snipe failed:`, error.message);
+            await this.sendTelegramMessage(`❌ SNIPE FAILED: ${tokenSymbol}`);
             return false;
         }
     }
@@ -622,7 +472,6 @@ ${sourceEmoji} ${tokenSymbol}
 
             console.log(`💰 SELLING ${position.symbol}... (${reason})`);
 
-            // REAL Jupiter sell execution
             const quoteResponse = await this.jupiter.quoteGet({
                 inputMint: tokenAddress,
                 outputMint: 'So11111111111111111111111111111111111111112', // SOL
@@ -648,9 +497,11 @@ ${sourceEmoji} ${tokenSymbol}
                 return false;
             }
 
-            // Actually execute the sell transaction
+            // Execute sell transaction
             try {
                 const transaction = VersionedTransaction.deserialize(Buffer.from(swapResponse.swapTransaction, 'base64'));
+                transaction.sign([this.wallet]);
+                
                 const signature = await this.connection.sendRawTransaction(transaction.serialize(), {
                     skipPreflight: false,
                     preflightCommitment: 'confirmed'
@@ -658,7 +509,6 @@ ${sourceEmoji} ${tokenSymbol}
                 
                 console.log(`📝 Sell transaction sent: ${signature}`);
                 
-                // Wait for confirmation
                 const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
                 
                 if (confirmation.value.err) {
@@ -669,35 +519,31 @@ ${sourceEmoji} ${tokenSymbol}
                 console.log(`✅ Sell transaction confirmed: ${signature}`);
                 
             } catch (txError) {
-                console.error(`❌ Sell transaction execution failed:`, txError.message);
+                console.error(`❌ Sell transaction failed:`, txError.message);
                 return false;
             }
 
-            // Use REAL exit price from the actual trade
-            const realExitPrice = quoteResponse.outAmount / quoteResponse.inAmount;
-            const multiplier = realExitPrice / position.entryPrice;
+            const currentPrice = await this.getCurrentPrice(tokenAddress);
+            const multiplier = currentPrice / position.entryPrice;
             const profitSOL = (quoteResponse.outAmount / 1e9) - this.SNIPE_AMOUNT;
             const holdTimeMin = (Date.now() - position.buyTime) / 60000;
 
             const emoji = profitSOL > 0 ? '🚀' : '📉';
-            const sourceEmoji = this.getSourceEmoji(position.source);
             
-            const sellMsg = `${emoji} DUAL POSITION CLOSED!
+            const sellMsg = `${emoji} POSITION CLOSED!
 
-${sourceEmoji} ${position.symbol}
-📍 ${position.source}
+💎 ${position.symbol}
 📊 ${multiplier.toFixed(2)}x
 💰 ${profitSOL > 0 ? '+' : ''}${profitSOL.toFixed(4)} SOL
 ⏰ ${holdTimeMin.toFixed(1)} min
 📝 ${reason}
 
-${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
+${profitSOL > 0 ? '🎉 PROFIT!' : '🛡️ LOSS CUT'}`;
 
             await this.sendTelegramMessage(sellMsg);
 
             this.trades.push({
                 symbol: position.symbol,
-                source: position.source,
                 multiplier: multiplier,
                 profitSOL: profitSOL,
                 reason: reason,
@@ -714,6 +560,18 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
         }
     }
 
+    async getCurrentPrice(tokenAddress) {
+        try {
+            const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, {
+                timeout: 5000
+            });
+            return parseFloat(response.data.pairs?.[0]?.priceUsd) || 0;
+        } catch (error) {
+            console.error('Price fetch error:', error.message);
+            return 0;
+        }
+    }
+
     async monitorPosition(tokenAddress) {
         const position = this.positions.get(tokenAddress);
         if (!position) return;
@@ -722,7 +580,6 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
             try {
                 if (!this.positions.has(tokenAddress)) return;
 
-                // REAL price monitoring via DexScreener
                 const currentPrice = await this.getCurrentPrice(tokenAddress);
                 if (!currentPrice) {
                     setTimeout(checkPosition, 15000);
@@ -731,12 +588,12 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
 
                 const currentMultiplier = currentPrice / position.entryPrice;
 
-                if (currentMultiplier >= position.targetMultiplier) {
-                    await this.sellToken(tokenAddress, `${position.targetMultiplier}x TARGET`);
+                if (currentMultiplier >= this.PROFIT_TARGET) {
+                    await this.sellToken(tokenAddress, `${this.PROFIT_TARGET}x TARGET`);
                     return;
                 }
 
-                if (currentMultiplier <= position.stopLoss) {
+                if (currentMultiplier <= this.STOP_LOSS) {
                     await this.sellToken(tokenAddress, 'STOP LOSS');
                     return;
                 }
@@ -756,23 +613,18 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
         if (!this.isRunning) return;
 
         try {
-            console.log('🔍 DUAL SNIPER: Scanning all sources...');
+            console.log('🔍 Scanning DexScreener...');
             
-            const [bitqueryTokens, dexTokens] = await Promise.all([
-                this.scanBitqueryReal(),
-                this.scanDexScreenerFixed()
-            ]);
-
-            const allTokens = [...bitqueryTokens, ...dexTokens];
-            console.log(`📊 Found ${bitqueryTokens.length} Bitquery + ${dexTokens.length} DexScreener tokens`);
+            const tokens = await this.scanDexScreener();
+            console.log(`📊 Found ${tokens.length} tokens to analyze`);
             
-            for (const token of allTokens) {
+            for (const token of tokens) {
                 if (this.positions.size >= this.MAX_POSITIONS) break;
                 
-                const analysis = await this.analyzeToken(token);
+                const analysis = this.analyzeToken(token);
                 
                 if (analysis.shouldBuy) {
-                    console.log(`🎯 DUAL TARGET: ${token.symbol} from ${token.source} | Score: ${analysis.score}/100`);
+                    console.log(`🎯 TARGET: ${token.symbol} | Score: ${analysis.score}/100`);
                     await this.buyToken(token.address, token.symbol, analysis);
                     await new Promise(resolve => setTimeout(resolve, 3000));
                 }
@@ -784,7 +636,7 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
             console.error('Trading loop error:', error.message);
         }
 
-        setTimeout(() => this.tradingLoop(), 20000);
+        setTimeout(() => this.tradingLoop(), 30000); // Scan every 30 seconds
     }
 
     showStats() {
@@ -794,42 +646,29 @@ ${profitSOL > 0 ? '🎉 ALPHA SECURED!' : '🛡️ LOSS CUT'}`;
         const bestTrade = this.trades.length > 0 ? Math.max(...this.trades.map(t => t.multiplier)) : 0;
 
         console.log('');
-        console.log('📊 === DUAL SNIPER PERFORMANCE ===');
+        console.log('📊 === SNIPER PERFORMANCE ===');
         console.log(`💰 P&L: ${totalProfit > 0 ? '+' : ''}${totalProfit.toFixed(4)} SOL`);
         console.log(`🎯 Trades: ${this.trades.length} | Win: ${winRate.toFixed(1)}%`);
         console.log(`🚀 Best: ${bestTrade.toFixed(2)}x`);
         console.log(`📊 Active: ${this.positions.size}/${this.MAX_POSITIONS}`);
         console.log(`🔄 Uptime: ${(process.uptime() / 3600).toFixed(1)}h`);
-        console.log('================================');
+        console.log('============================');
         console.log('');
     }
 
     async start() {
-        console.log('🚀 Starting Dual Source Sniper Bot...');
+        console.log('🚀 Starting DexScreener Sniper Bot...');
         
         if (await this.initialize()) {
             this.isRunning = true;
-            console.log('🔥 DUAL SNIPER IS LIVE - HUNTING ACROSS ALL SOURCES! 🔥');
+            console.log('🔥 SNIPER IS LIVE - HUNTING DEXSCREENER! 🔥');
             this.tradingLoop();
         }
     }
-
-    async getCurrentPrice(tokenAddress) {
-        try {
-            const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, {
-                timeout: 5000
-            });
-            return parseFloat(response.data.pairs?.[0]?.priceUsd) || 0;
-        } catch (error) {
-            console.error('Price fetch error:', error.message);
-            return 0;
-        }
-    }
-
 }
 
-// Start the Dual Sniper
-const bot = new DualSourceSniperBot();
+// Start the Sniper
+const bot = new DexScreenerSniperBot();
 bot.start();
 
-module.exports = DualSourceSniperBot;
+module.exports = DexScreenerSniperBot;
